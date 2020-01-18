@@ -362,44 +362,52 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 	}
 
 	var wg sync.WaitGroup
-	success := false
+	success := make(chan struct{}, 0)
+	fail := make(chan struct{}, 0)
 	if len(session.connections) > 0 {
 		for _, connection := range session.connections {
 			wg.Add(1)
 			go func(connection *Connection) {
 				defer wg.Done()
 				err := session.sendWith(connection.localClientID, connection.remoteClientID, buf, writeTimeout)
-				if err != nil {
-					log.Println(err)
-				} else {
-					success = true
+				if err == nil {
+					select {
+					case success <- struct{}{}:
+					default:
+					}
 				}
 			}(connection)
 		}
 	} else {
 		for i, localClientID := range session.localClientIDs {
+			wg.Add(1)
 			remoteClientID := localClientID
 			if len(session.remoteClientIDs) > 0 {
 				remoteClientID = session.remoteClientIDs[i%len(session.remoteClientIDs)]
 			}
-			wg.Add(1)
 			go func(localClientID, remoteClientID string) {
 				defer wg.Done()
 				err := session.sendWith(localClientID, remoteClientID, buf, writeTimeout)
-				if err != nil {
-					log.Println(err)
-				} else {
-					success = true
+				if err == nil {
+					select {
+					case success <- struct{}{}:
+					default:
+					}
 				}
 			}(localClientID, remoteClientID)
 		}
 	}
-	wg.Wait()
-	if !success {
+	go func() {
+		wg.Wait()
+		fail <- struct{}{}
+	}()
+
+	select {
+	case <-success:
+		return nil
+	case <-fail:
 		return errors.New("send handshake packet failed")
 	}
-
-	return nil
 }
 
 func (session *Session) handleHandshakePacket(packet *pb.Packet) error {
@@ -470,20 +478,33 @@ func (session *Session) sendClosePacket() error {
 		return err
 	}
 
-	success := false
+	var wg sync.WaitGroup
+	success := make(chan struct{}, 0)
+	fail := make(chan struct{}, 0)
 	for _, connection := range session.connections {
-		err = session.sendWith(connection.localClientID, connection.remoteClientID, buf, connection.RetransmissionTimeout())
-		if err != nil {
-			log.Println(err)
-		} else {
-			success = true
-		}
+		wg.Add(1)
+		go func(connection *Connection) {
+			defer wg.Done()
+			err = session.sendWith(connection.localClientID, connection.remoteClientID, buf, connection.RetransmissionTimeout())
+			if err == nil {
+				select {
+				case success <- struct{}{}:
+				default:
+				}
+			}
+		}(connection)
 	}
-	if !success {
+	go func() {
+		wg.Wait()
+		fail <- struct{}{}
+	}()
+
+	select {
+	case <-success:
+		return nil
+	case <-fail:
 		return errors.New("send close packet failed")
 	}
-
-	return nil
 }
 
 func (session *Session) handleClosePacket() error {
