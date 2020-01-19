@@ -278,7 +278,7 @@ func (session *Session) start() error {
 	var err error
 	for {
 		select {
-		case <-time.After(session.config.FlushInterval):
+		case <-time.After(time.Duration(session.config.FlushInterval) * time.Millisecond):
 		case <-session.ctx.Done():
 			return session.ctx.Err()
 		}
@@ -520,14 +520,14 @@ func (session *Session) handleClosePacket() error {
 			log.Println(err)
 		}
 	}()
-	time.AfterFunc(session.config.CloseDelay, session.close)
+	time.AfterFunc(time.Duration(session.config.CloseDelay)*time.Millisecond, session.close)
 	return nil
 }
 
 func (session *Session) Dial() error {
 	var dialTimeoutChan <-chan time.Time
 	if session.config.DialTimeout > 0 {
-		dialTimeoutChan = time.After(session.config.DialTimeout)
+		dialTimeoutChan = time.After(time.Duration(session.config.DialTimeout) * time.Millisecond)
 	}
 
 	session.acceptLock.Lock()
@@ -536,7 +536,7 @@ func (session *Session) Dial() error {
 		return SessionEstablished
 	}
 
-	err := session.sendHandshakePacket(session.config.DialTimeout)
+	err := session.sendHandshakePacket(time.Duration(session.config.DialTimeout) * time.Millisecond)
 	if err != nil {
 		return err
 	}
@@ -567,7 +567,7 @@ func (session *Session) Accept() error {
 
 	go session.start()
 	session.isAccepted = true
-	return session.sendHandshakePacket(session.config.MaxRetransmissionTimeout)
+	return session.sendHandshakePacket(time.Duration(session.config.MaxRetransmissionTimeout) * time.Millisecond)
 }
 
 func (session *Session) Read(b []byte) (_ int, e error) {
@@ -760,7 +760,7 @@ func (session *Session) Close() error {
 			log.Println(err)
 		}
 	}()
-	time.AfterFunc(session.config.CloseDelay, session.close)
+	time.AfterFunc(time.Duration(session.config.CloseDelay)*time.Millisecond, session.close)
 	return nil
 }
 
