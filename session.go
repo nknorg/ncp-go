@@ -399,7 +399,10 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 	}
 	go func() {
 		wg.Wait()
-		fail <- struct{}{}
+		select {
+		case fail <- struct{}{}:
+		default:
+		}
 	}()
 
 	select {
@@ -496,7 +499,10 @@ func (session *Session) sendClosePacket() error {
 	}
 	go func() {
 		wg.Wait()
-		fail <- struct{}{}
+		select {
+		case fail <- struct{}{}:
+		default:
+		}
 	}()
 
 	select {
