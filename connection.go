@@ -32,7 +32,7 @@ func (session *Session) NewConnection(localClientID, remoteClientID string) (*Co
 		localClientID:         localClientID,
 		remoteClientID:        remoteClientID,
 		windowSize:            uint32(session.config.InitialConnectionWindowSize),
-		retransmissionTimeout: session.config.InitialRetransmissionTimeout,
+		retransmissionTimeout: time.Duration(session.config.InitialRetransmissionTimeout) * time.Millisecond,
 		sendWindowUpdate:      make(chan struct{}, 1),
 		timeSentSeq:           make(map[uint32]time.Time),
 		resentSeq:             make(map[uint32]struct{}),
@@ -77,8 +77,8 @@ func (conn *Connection) ReceiveACK(sequenceID uint32) {
 			}
 		}
 		conn.retransmissionTimeout += time.Duration(math.Tanh(float64(3*time.Since(t)-conn.retransmissionTimeout)/float64(time.Millisecond)/1000) * 100 * float64(time.Millisecond))
-		if conn.retransmissionTimeout > conn.session.config.MaxRetransmissionTimeout {
-			conn.retransmissionTimeout = conn.session.config.MaxRetransmissionTimeout
+		if conn.retransmissionTimeout > time.Duration(conn.session.config.MaxRetransmissionTimeout)*time.Millisecond {
+			conn.retransmissionTimeout = time.Duration(conn.session.config.MaxRetransmissionTimeout) * time.Millisecond
 		}
 		delete(conn.timeSentSeq, sequenceID)
 		delete(conn.resentSeq, sequenceID)
@@ -173,7 +173,7 @@ func (conn *Connection) tx() error {
 func (conn *Connection) sendAck() error {
 	for {
 		select {
-		case <-time.After(conn.session.config.SendAckInterval):
+		case <-time.After(time.Duration(conn.session.config.SendAckInterval) * time.Millisecond):
 		case <-conn.session.ctx.Done():
 			return conn.session.ctx.Err()
 		}
@@ -231,7 +231,7 @@ func (conn *Connection) sendAck() error {
 func (conn *Connection) checkTimeout() error {
 	for {
 		select {
-		case <-time.After(conn.session.config.CheckTimeoutInterval):
+		case <-time.After(time.Duration(conn.session.config.CheckTimeoutInterval) * time.Millisecond):
 		case <-conn.session.ctx.Done():
 			return conn.session.ctx.Err()
 		}
