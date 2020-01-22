@@ -9,7 +9,7 @@ type Config struct {
 	MinConnectionWindowSize      int32 // in packets
 	MaxAckSeqListSize            int32
 	FlushInterval                int32 // in millisecond
-	CloseDelay                   int32 // in millisecond
+	Linger                       int32 // in millisecond
 	InitialRetransmissionTimeout int32 // in millisecond
 	MaxRetransmissionTimeout     int32 // in millisecond
 	SendAckInterval              int32 // in millisecond
