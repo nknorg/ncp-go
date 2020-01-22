@@ -160,7 +160,7 @@ func (session *Session) GetSendSeq() (uint32, error) {
 
 func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []byte) error {
 	if session.IsClosed() {
-		return SessionClosed
+		return ErrSessionClosed
 	}
 
 	packet := &pb.Packet{}
@@ -471,7 +471,7 @@ func (session *Session) handleHandshakePacket(packet *pb.Packet) error {
 
 func (session *Session) sendClosePacket() error {
 	if !session.IsEstablished() {
-		return SessionNotEstablished
+		return ErrSessionNotEstablished
 	}
 
 	buf, err := proto.Marshal(&pb.Packet{
@@ -533,7 +533,7 @@ func (session *Session) Dial() error {
 	session.acceptLock.Lock()
 	defer session.acceptLock.Unlock()
 	if session.isAccepted {
-		return SessionEstablished
+		return ErrSessionEstablished
 	}
 
 	err := session.sendHandshakePacket(time.Duration(session.config.DialTimeout) * time.Millisecond)
@@ -544,7 +544,7 @@ func (session *Session) Dial() error {
 	select {
 	case <-session.onAccept:
 	case <-dialTimeoutChan:
-		return DialTimeout
+		return ErrDialTimeout
 	}
 
 	go session.start()
@@ -556,7 +556,7 @@ func (session *Session) Accept() error {
 	session.acceptLock.Lock()
 	defer session.acceptLock.Unlock()
 	if session.isAccepted {
-		return SessionEstablished
+		return ErrSessionEstablished
 	}
 
 	select {
@@ -573,19 +573,19 @@ func (session *Session) Accept() error {
 func (session *Session) Read(b []byte) (_ int, e error) {
 	defer func() {
 		if e == context.DeadlineExceeded {
-			e = ReadDeadlineExceeded
+			e = ErrReadDeadlineExceeded
 		}
 		if e == context.Canceled {
-			e = SessionClosed
+			e = ErrSessionClosed
 		}
 	}()
 
 	if session.IsClosed() {
-		return 0, SessionClosed
+		return 0, ErrSessionClosed
 	}
 
 	if !session.IsEstablished() {
-		return 0, SessionNotEstablished
+		return 0, ErrSessionNotEstablished
 	}
 
 	if len(b) == 0 {
@@ -620,7 +620,7 @@ func (session *Session) Read(b []byte) (_ int, e error) {
 
 	data := session.recvWindowData[session.recvWindowStartSeq]
 	if !session.IsStream() && len(b) < len(session.recvWindowData[session.recvWindowStartSeq]) {
-		return 0, BufferSizeTooSmall
+		return 0, ErrBufferSizeTooSmall
 	}
 
 	bytesReceived := copy(b, data)
@@ -656,23 +656,23 @@ func (session *Session) Read(b []byte) (_ int, e error) {
 func (session *Session) Write(b []byte) (_ int, e error) {
 	defer func() {
 		if e == context.DeadlineExceeded {
-			e = WriteDeadlineExceeded
+			e = ErrWriteDeadlineExceeded
 		}
 		if e == context.Canceled {
-			e = SessionClosed
+			e = ErrSessionClosed
 		}
 	}()
 
 	if session.IsClosed() {
-		return 0, SessionClosed
+		return 0, ErrSessionClosed
 	}
 
 	if !session.IsEstablished() {
-		return 0, SessionNotEstablished
+		return 0, ErrSessionNotEstablished
 	}
 
 	if !session.IsStream() && (len(b) > int(session.sendMtu) || len(b) > int(session.sendWindowSize)) {
-		return 0, DataSizeTooLarge
+		return 0, ErrDataSizeTooLarge
 	}
 
 	if len(b) == 0 {
