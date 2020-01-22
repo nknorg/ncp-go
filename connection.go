@@ -146,7 +146,7 @@ func (conn *Connection) tx() error {
 		err = conn.session.sendWith(conn.localClientID, conn.remoteClientID, buf, conn.retransmissionTimeout)
 		if err != nil {
 			if conn.session.IsClosed() {
-				return Closed
+				return ErrSessionClosed
 			}
 			log.Println(err)
 			select {
