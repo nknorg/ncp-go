@@ -514,13 +514,10 @@ func (session *Session) sendClosePacket() error {
 }
 
 func (session *Session) handleClosePacket() error {
-	go func() {
-		err := session.flushSendBuffer()
-		if err != nil {
-			log.Println(err)
-		}
-	}()
-	time.AfterFunc(time.Duration(session.config.CloseDelay)*time.Millisecond, session.close)
+	session.Lock()
+	session.isClosed = true
+	session.Unlock()
+	session.close()
 	return nil
 }
 
@@ -740,27 +737,60 @@ func (session *Session) Write(b []byte) (_ int, e error) {
 }
 
 func (session *Session) close() {
-	session.Lock()
-	session.isClosed = true
-	session.Unlock()
-
 	session.cancel()
 	session.readCancel()
 	session.writeCancel()
 }
 
 func (session *Session) Close() error {
+	session.Lock()
+	session.isClosed = true
+	session.Unlock()
+
+	timeout := make(chan struct{}, 1)
+
+	if session.config.Linger > 0 {
+		go func() {
+			select {
+			case <-time.After(time.Duration(session.config.Linger) * time.Millisecond):
+				timeout <- struct{}{}
+			case <-session.ctx.Done():
+			}
+		}()
+	}
+
 	go func() {
-		err := session.flushSendBuffer()
+		if session.config.Linger != 0 {
+			err := session.flushSendBuffer()
+			if err != nil {
+				log.Println(err)
+			}
+
+			func() {
+				for {
+					select {
+					case <-time.After(100 * time.Millisecond):
+						session.RLock()
+						isSendFinished := session.sendWindowStartSeq == session.sendWindowEndSeq
+						session.RUnlock()
+						if isSendFinished {
+							return
+						}
+					case <-timeout:
+						return
+					}
+				}
+			}()
+		}
+
+		err := session.sendClosePacket()
 		if err != nil {
 			log.Println(err)
 		}
-		err = session.sendClosePacket()
-		if err != nil {
-			log.Println(err)
-		}
+
+		session.close()
 	}()
-	time.AfterFunc(time.Duration(session.config.CloseDelay)*time.Millisecond, session.close)
+
 	return nil
 }
 
