@@ -1,20 +1,28 @@
 package ncp
 
 var (
-	ErrDialTimeout           = GenericError{err: "dial timeout", timeout: true, temporary: true}
-	ErrSessionClosed         = GenericError{err: "session closed", timeout: false, temporary: false}
-	ErrSessionEstablished    = GenericError{err: "session is already established", timeout: false, temporary: false}
-	ErrSessionNotEstablished = GenericError{err: "session not established yet", timeout: false, temporary: true}
-	ErrReadDeadlineExceeded  = GenericError{err: "read deadline exceeded", timeout: true, temporary: true}
-	ErrWriteDeadlineExceeded = GenericError{err: "write deadline exceeded", timeout: true, temporary: true}
-	ErrBufferSizeTooSmall    = GenericError{err: "read buffer size is less than data length in non-session mode", timeout: false, temporary: true}
-	ErrDataSizeTooLarge      = GenericError{err: "data size is greater than session mtu in non-session mode", timeout: false, temporary: true}
+	ErrDialTimeout           = NewGenericError("dial timeout", true, true)
+	ErrSessionClosed         = NewGenericError("session closed", false, false)
+	ErrSessionEstablished    = NewGenericError("session is already established", false, false)
+	ErrSessionNotEstablished = NewGenericError("session not established yet", false, true)
+	ErrReadDeadlineExceeded  = NewGenericError("read deadline exceeded", true, true)
+	ErrWriteDeadlineExceeded = NewGenericError("write deadline exceeded", true, true)
+	ErrBufferSizeTooSmall    = NewGenericError("read buffer size is less than data length in non-session mode", false, true)
+	ErrDataSizeTooLarge      = NewGenericError("data size is greater than session mtu in non-session mode", false, true)
 )
 
 type GenericError struct {
 	err       string
 	timeout   bool
 	temporary bool
+}
+
+func NewGenericError(err string, timeout, temporary bool) *GenericError {
+	return &GenericError{
+		err:       err,
+		timeout:   timeout,
+		temporary: temporary,
+	}
 }
 
 func (e GenericError) Error() string   { return e.err }
