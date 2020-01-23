@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -362,6 +363,8 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 	}
 
 	var wg sync.WaitGroup
+	var lock sync.Mutex
+	var errMsg []string
 	success := make(chan struct{}, 0)
 	fail := make(chan struct{}, 0)
 	if len(session.connections) > 0 {
@@ -375,6 +378,10 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 					case success <- struct{}{}:
 					default:
 					}
+				} else {
+					lock.Lock()
+					errMsg = append(errMsg, err.Error())
+					lock.Unlock()
 				}
 			}(connection)
 		}
@@ -393,6 +400,10 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 					case success <- struct{}{}:
 					default:
 					}
+				} else {
+					lock.Lock()
+					errMsg = append(errMsg, err.Error())
+					lock.Unlock()
 				}
 			}(localClientID, remoteClientID)
 		}
@@ -409,7 +420,7 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 	case <-success:
 		return nil
 	case <-fail:
-		return errors.New("send handshake packet failed")
+		return errors.New(strings.Join(errMsg, "; "))
 	}
 }
 
@@ -482,6 +493,8 @@ func (session *Session) sendClosePacket() error {
 	}
 
 	var wg sync.WaitGroup
+	var lock sync.Mutex
+	var errMsg []string
 	success := make(chan struct{}, 0)
 	fail := make(chan struct{}, 0)
 	for _, connection := range session.connections {
@@ -494,6 +507,10 @@ func (session *Session) sendClosePacket() error {
 				case success <- struct{}{}:
 				default:
 				}
+			} else {
+				lock.Lock()
+				errMsg = append(errMsg, err.Error())
+				lock.Unlock()
 			}
 		}(connection)
 	}
@@ -509,7 +526,7 @@ func (session *Session) sendClosePacket() error {
 	case <-success:
 		return nil
 	case <-fail:
-		return errors.New("send close packet failed")
+		return errors.New(strings.Join(errMsg, "; "))
 	}
 }
 
