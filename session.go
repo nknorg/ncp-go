@@ -69,6 +69,11 @@ type Session struct {
 type SendWithFunc func(localClientID, remoteClientID string, buf []byte, writeTimeout time.Duration) error
 
 func NewSession(localAddr, remoteAddr net.Addr, localClientIDs, remoteClientIDs []string, sendWith SendWithFunc, config *Config) (*Session, error) {
+	config, err := MergeConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
 	session := &Session{
 		config:             config,
 		localAddr:          localAddr,
@@ -538,27 +543,31 @@ func (session *Session) handleClosePacket() error {
 	return nil
 }
 
-func (session *Session) Dial() error {
-	var dialTimeoutChan <-chan time.Time
-	if session.config.DialTimeout > 0 {
-		dialTimeoutChan = time.After(time.Duration(session.config.DialTimeout) * time.Millisecond)
-	}
-
+func (session *Session) Dial(ctx context.Context) error {
 	session.acceptLock.Lock()
 	defer session.acceptLock.Unlock()
 	if session.isAccepted {
 		return ErrSessionEstablished
 	}
 
-	err := session.sendHandshakePacket(time.Duration(session.config.DialTimeout) * time.Millisecond)
+	var writeTimeout time.Duration
+	deadline, ok := ctx.Deadline()
+	if ok {
+		writeTimeout = time.Until(deadline)
+		if writeTimeout < 0 {
+			return ctx.Err()
+		}
+	}
+
+	err := session.sendHandshakePacket(writeTimeout)
 	if err != nil {
 		return err
 	}
 
 	select {
 	case <-session.onAccept:
-	case <-dialTimeoutChan:
-		return ErrDialTimeout
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	go session.start()
@@ -847,4 +856,9 @@ func (session *Session) SetWriteDeadline(t time.Time) error {
 		session.writeContext, session.writeCancel = context.WithDeadline(session.ctx, t)
 	}
 	return nil
+}
+
+// SetLinger sets session linger in unit of millisecond
+func (session *Session) SetLinger(t int32) {
+	session.config.Linger = t
 }
