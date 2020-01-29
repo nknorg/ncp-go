@@ -6,8 +6,11 @@ var (
 	ErrSessionNotEstablished = NewGenericError("session not established yet", false, true)
 	ErrReadDeadlineExceeded  = NewGenericError("read deadline exceeded", true, true)
 	ErrWriteDeadlineExceeded = NewGenericError("write deadline exceeded", true, true)
-	ErrBufferSizeTooSmall    = NewGenericError("read buffer size is less than data length in non-session mode", false, true)
-	ErrDataSizeTooLarge      = NewGenericError("data size is greater than session mtu in non-session mode", false, true)
+	ErrBufferSizeTooSmall    = NewGenericError("read buffer size is less than data length in non-stream mode", false, true)
+	ErrDataSizeTooLarge      = NewGenericError("data size is greater than session mtu", false, true)
+	ErrInvalidPacket         = NewGenericError("invalid packet", false, true)
+	ErrRecvWindowFull        = NewGenericError("receive window full", false, true)
+	ErrNotHandshake          = NewGenericError("first packet is not handshake packet", false, true)
 )
 
 type GenericError struct {

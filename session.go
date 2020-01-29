@@ -3,7 +3,6 @@ package ncp
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -92,8 +91,10 @@ func NewSession(localAddr, remoteAddr net.Addr, localClientIDs, remoteClientIDs 
 	}
 
 	session.ctx, session.cancel = context.WithCancel(context.Background())
-	session.SetReadDeadline(zeroTime)
-	session.SetWriteDeadline(zeroTime)
+	err = session.SetDeadline(zeroTime)
+	if err != nil {
+		return nil, err
+	}
 
 	return session, nil
 }
@@ -186,7 +187,7 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 
 	if isEstablished && (len(packet.AckStartSeq) > 0 || len(packet.AckSeqCount) > 0) {
 		if len(packet.AckStartSeq) > 0 && len(packet.AckSeqCount) > 0 && len(packet.AckStartSeq) != len(packet.AckSeqCount) {
-			return fmt.Errorf("AckStartSeq length %d is different from AckSeqCount length %d", len(packet.AckStartSeq), len(packet.AckSeqCount))
+			return ErrInvalidPacket
 		}
 
 		count := 0
@@ -245,7 +246,7 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 
 	if isEstablished && packet.SequenceId > 0 {
 		if uint32(len(packet.Data)) > session.recvMtu {
-			return errors.New("received data exceeds mtu")
+			return ErrDataSizeTooLarge
 		}
 
 		session.Lock()
@@ -253,7 +254,7 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 			if _, ok := session.recvWindowData[packet.SequenceId]; !ok {
 				if session.recvWindowUsed+uint32(len(packet.Data)) > session.recvWindowSize {
 					session.Unlock()
-					return errors.New("receive window full")
+					return ErrRecvWindowFull
 				}
 
 				session.recvWindowData[packet.SequenceId] = packet.Data
@@ -434,21 +435,21 @@ func (session *Session) handleHandshakePacket(packet *pb.Packet) error {
 	defer session.Unlock()
 	if !session.isEstablished {
 		if packet.WindowSize == 0 {
-			return errors.New("empty remote window size")
+			return ErrInvalidPacket
 		}
 		if packet.WindowSize < session.sendWindowSize {
 			session.sendWindowSize = packet.WindowSize
 		}
 
 		if packet.Mtu == 0 {
-			return errors.New("empty mtu")
+			return ErrInvalidPacket
 		}
 		if packet.Mtu < session.sendMtu {
 			session.sendMtu = packet.Mtu
 		}
 
 		if len(packet.ClientIds) == 0 {
-			return errors.New("empty identifier prefix")
+			return ErrInvalidPacket
 		}
 		n := len(session.localClientIDs)
 		if len(packet.ClientIds) < n {
@@ -585,7 +586,7 @@ func (session *Session) Accept() error {
 	select {
 	case <-session.onAccept:
 	default:
-		return errors.New("receive non-handshake first packet")
+		return ErrNotHandshake
 	}
 
 	go session.start()
