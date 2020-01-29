@@ -1,7 +1,6 @@
 package ncp
 
 var (
-	ErrDialTimeout           = NewGenericError("dial timeout", true, true)
 	ErrSessionClosed         = NewGenericError("session closed", false, false)
 	ErrSessionEstablished    = NewGenericError("session is already established", false, false)
 	ErrSessionNotEstablished = NewGenericError("session not established yet", false, true)
