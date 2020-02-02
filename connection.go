@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/nknorg/ncp/pb"
+	"github.com/nknorg/ncp-go/pb"
 )
 
 type Connection struct {
@@ -26,7 +26,7 @@ type Connection struct {
 	retransmissionTimeout time.Duration
 }
 
-func (session *Session) NewConnection(localClientID, remoteClientID string) (*Connection, error) {
+func NewConnection(session *Session, localClientID, remoteClientID string) (*Connection, error) {
 	conn := &Connection{
 		session:               session,
 		localClientID:         localClientID,
@@ -54,7 +54,7 @@ func (conn *Connection) RetransmissionTimeout() time.Duration {
 	return conn.retransmissionTimeout
 }
 
-func (conn *Connection) SendACK(sequenceID uint32) {
+func (conn *Connection) SendAck(sequenceID uint32) {
 	conn.Lock()
 	heap.Push(&conn.sendAckQueue, sequenceID)
 	conn.Unlock()
@@ -66,26 +66,36 @@ func (conn *Connection) SendAckQueueLen() int {
 	return conn.sendAckQueue.Len()
 }
 
-func (conn *Connection) ReceiveACK(sequenceID uint32) {
+func (conn *Connection) ReceiveAck(sequenceID uint32, isSentByMe bool) {
 	conn.Lock()
 	defer conn.Unlock()
-	if t, ok := conn.timeSentSeq[sequenceID]; ok {
-		if _, ok := conn.resentSeq[sequenceID]; !ok {
-			conn.windowSize++
-			if conn.windowSize > uint32(conn.session.config.MaxConnectionWindowSize) {
-				conn.windowSize = uint32(conn.session.config.MaxConnectionWindowSize)
-			}
+
+	t, ok := conn.timeSentSeq[sequenceID]
+	if !ok {
+		return
+	}
+
+	if _, ok := conn.resentSeq[sequenceID]; !ok {
+		conn.windowSize++
+		if conn.windowSize > uint32(conn.session.config.MaxConnectionWindowSize) {
+			conn.windowSize = uint32(conn.session.config.MaxConnectionWindowSize)
 		}
-		conn.retransmissionTimeout += time.Duration(math.Tanh(float64(3*time.Since(t)-conn.retransmissionTimeout)/float64(time.Millisecond)/1000) * 100 * float64(time.Millisecond))
+	}
+
+	if isSentByMe {
+		rtt := time.Since(t)
+		conn.retransmissionTimeout += time.Duration(math.Tanh(float64(3*rtt-conn.retransmissionTimeout)/float64(time.Millisecond)/1000) * 100 * float64(time.Millisecond))
 		if conn.retransmissionTimeout > time.Duration(conn.session.config.MaxRetransmissionTimeout)*time.Millisecond {
 			conn.retransmissionTimeout = time.Duration(conn.session.config.MaxRetransmissionTimeout) * time.Millisecond
 		}
-		delete(conn.timeSentSeq, sequenceID)
-		delete(conn.resentSeq, sequenceID)
-		select {
-		case conn.sendWindowUpdate <- struct{}{}:
-		default:
-		}
+	}
+
+	delete(conn.timeSentSeq, sequenceID)
+	delete(conn.resentSeq, sequenceID)
+
+	select {
+	case conn.sendWindowUpdate <- struct{}{}:
+	default:
 	}
 }
 
@@ -113,13 +123,14 @@ func (conn *Connection) tx() error {
 	var err error
 	for {
 		if seq == 0 {
-			seq, err = conn.session.GetResendSeq()
+			seq, err = conn.session.getResendSeq()
 			if err != nil {
 				return err
 			}
 		}
+
 		if seq == 0 {
-			err = conn.waitForSendWindow(conn.session.ctx)
+			err = conn.waitForSendWindow(conn.session.context)
 			if err == errMaxWait {
 				continue
 			}
@@ -127,7 +138,7 @@ func (conn *Connection) tx() error {
 				return err
 			}
 
-			seq, err = conn.session.GetSendSeq()
+			seq, err = conn.session.getSendSeq()
 			if err != nil {
 				return err
 			}
@@ -152,8 +163,8 @@ func (conn *Connection) tx() error {
 			select {
 			case conn.session.resendChan <- seq:
 				seq = 0
-			default:
-				log.Println("Resend channel full")
+			case <-conn.session.context.Done():
+				return conn.session.context.Err()
 			}
 			time.Sleep(time.Second)
 			continue
@@ -174,8 +185,8 @@ func (conn *Connection) sendAck() error {
 	for {
 		select {
 		case <-time.After(time.Duration(conn.session.config.SendAckInterval) * time.Millisecond):
-		case <-conn.session.ctx.Done():
-			return conn.session.ctx.Err()
+		case <-conn.session.context.Done():
+			return conn.session.context.Err()
 		}
 
 		if conn.SendAckQueueLen() == 0 {
@@ -189,7 +200,7 @@ func (conn *Connection) sendAck() error {
 		for conn.sendAckQueue.Len() > 0 && len(ackStartSeqList) < int(conn.session.config.MaxAckSeqListSize) {
 			ackStartSeq := heap.Pop(&conn.sendAckQueue).(uint32)
 			ackSeqCount := uint32(1)
-			for conn.sendAckQueue.Len() > 0 && conn.sendAckQueue[0] == NextSeq(ackStartSeq, ackSeqCount) {
+			for conn.sendAckQueue.Len() > 0 && conn.sendAckQueue[0] == NextSeq(ackStartSeq, int64(ackSeqCount)) {
 				heap.Pop(&conn.sendAckQueue)
 				ackSeqCount++
 			}
@@ -213,9 +224,11 @@ func (conn *Connection) sendAck() error {
 		buf, err := proto.Marshal(&pb.Packet{
 			AckStartSeq: ackStartSeqList,
 			AckSeqCount: ackSeqCountList,
+			BytesRead:   conn.session.GetBytesRead(),
 		})
 		if err != nil {
 			log.Println(err)
+			time.Sleep(time.Second)
 			continue
 		}
 
@@ -225,6 +238,8 @@ func (conn *Connection) sendAck() error {
 			time.Sleep(time.Second)
 			continue
 		}
+
+		conn.session.updateBytesReadSentTime()
 	}
 }
 
@@ -232,8 +247,8 @@ func (conn *Connection) checkTimeout() error {
 	for {
 		select {
 		case <-time.After(time.Duration(conn.session.config.CheckTimeoutInterval) * time.Millisecond):
-		case <-conn.session.ctx.Done():
-			return conn.session.ctx.Err()
+		case <-conn.session.context.Done():
+			return conn.session.context.Err()
 		}
 
 		threshold := time.Now().Add(-conn.retransmissionTimeout)
@@ -250,8 +265,8 @@ func (conn *Connection) checkTimeout() error {
 					if conn.windowSize < uint32(conn.session.config.MinConnectionWindowSize) {
 						conn.windowSize = uint32(conn.session.config.MinConnectionWindowSize)
 					}
-				default:
-					log.Println("Resend channel full, discarding message")
+				case <-conn.session.context.Done():
+					return conn.session.context.Err()
 				}
 			}
 		}

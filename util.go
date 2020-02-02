@@ -1,12 +1,15 @@
 package ncp
 
 import (
+	"errors"
 	"math"
 	"time"
 )
 
 var (
-	zeroTime time.Time
+	zeroTime   time.Time
+	maxWait    = time.Second
+	errMaxWait = errors.New("max wait time reached")
 )
 
 type SeqHeap []uint32
@@ -27,12 +30,13 @@ func (h *SeqHeap) Pop() interface{} {
 	return x
 }
 
-func PrevSeq(seq, step uint32) uint32 {
-	return (seq-MinSequenceID-step)%(math.MaxUint32-MinSequenceID+1) + MinSequenceID
-}
-
-func NextSeq(seq, step uint32) uint32 {
-	return (seq-MinSequenceID+step)%(math.MaxUint32-MinSequenceID+1) + MinSequenceID
+func NextSeq(seq uint32, step int64) uint32 {
+	var max int64 = math.MaxUint32 - MinSequenceID + 1
+	res := (int64(seq) - MinSequenceID + step) % max
+	if res < 0 {
+		res += max
+	}
+	return uint32(res + MinSequenceID)
 }
 
 func SeqInBetween(startSeq, endSeq, targetSeq uint32) bool {

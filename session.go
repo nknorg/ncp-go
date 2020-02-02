@@ -10,16 +10,11 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/nknorg/ncp/pb"
+	"github.com/nknorg/ncp-go/pb"
 )
 
 const (
 	MinSequenceID = 1
-)
-
-var (
-	maxWait    = time.Second
-	errMaxWait = errors.New("max wait time reached")
 )
 
 type Session struct {
@@ -39,7 +34,7 @@ type Session struct {
 	resendChan       chan uint32
 	sendWindowUpdate chan struct{}
 	recvDataUpdate   chan struct{}
-	ctx              context.Context
+	context          context.Context
 	cancel           context.CancelFunc
 	readContext      context.Context
 	readCancel       context.CancelFunc
@@ -52,17 +47,20 @@ type Session struct {
 	isAccepted bool
 
 	sync.RWMutex
-	isEstablished      bool
-	isClosed           bool
-	sendBuffer         []byte
-	sendWindowStartSeq uint32
-	sendWindowEndSeq   uint32
-	sendWindowUsed     uint32
-	sendWindowData     map[uint32][]byte
-	sendWindowDataSize map[uint32]uint32
-	recvWindowStartSeq uint32
-	recvWindowUsed     uint32
-	recvWindowData     map[uint32][]byte
+	isEstablished       bool
+	isClosed            bool
+	sendBuffer          []byte
+	sendWindowStartSeq  uint32
+	sendWindowEndSeq    uint32
+	sendWindowData      map[uint32][]byte
+	recvWindowStartSeq  uint32
+	recvWindowUsed      uint32
+	recvWindowData      map[uint32][]byte
+	bytesWrite          uint64
+	bytesRead           uint64
+	bytesReadSentTime   time.Time
+	bytesReadUpdateTime time.Time
+	remoteBytesRead     uint64
 }
 
 type SendWithFunc func(localClientID, remoteClientID string, buf []byte, writeTimeout time.Duration) error
@@ -74,23 +72,29 @@ func NewSession(localAddr, remoteAddr net.Addr, localClientIDs, remoteClientIDs 
 	}
 
 	session := &Session{
-		config:             config,
-		localAddr:          localAddr,
-		remoteAddr:         remoteAddr,
-		localClientIDs:     localClientIDs,
-		remoteClientIDs:    remoteClientIDs,
-		sendWith:           sendWith,
-		sendWindowSize:     uint32(config.SessionWindowSize),
-		recvWindowSize:     uint32(config.SessionWindowSize),
-		sendMtu:            uint32(config.MTU),
-		recvMtu:            uint32(config.MTU),
-		sendWindowStartSeq: MinSequenceID,
-		sendWindowEndSeq:   MinSequenceID,
-		recvWindowStartSeq: MinSequenceID,
-		onAccept:           make(chan struct{}, 1),
+		config:              config,
+		localAddr:           localAddr,
+		remoteAddr:          remoteAddr,
+		localClientIDs:      localClientIDs,
+		remoteClientIDs:     remoteClientIDs,
+		sendWith:            sendWith,
+		sendWindowSize:      uint32(config.SessionWindowSize),
+		recvWindowSize:      uint32(config.SessionWindowSize),
+		sendMtu:             uint32(config.MTU),
+		recvMtu:             uint32(config.MTU),
+		sendWindowStartSeq:  MinSequenceID,
+		sendWindowEndSeq:    MinSequenceID,
+		recvWindowStartSeq:  MinSequenceID,
+		recvWindowUsed:      0,
+		bytesWrite:          0,
+		bytesRead:           0,
+		bytesReadSentTime:   time.Now(),
+		bytesReadUpdateTime: time.Now(),
+		remoteBytesRead:     0,
+		onAccept:            make(chan struct{}, 1),
 	}
 
-	session.ctx, session.cancel = context.WithCancel(context.Background())
+	session.context, session.cancel = context.WithCancel(context.Background())
 	err = session.SetDeadline(zeroTime)
 	if err != nil {
 		return nil, err
@@ -115,10 +119,25 @@ func (session *Session) IsClosed() bool {
 	return session.isClosed
 }
 
+func (session *Session) GetBytesRead() uint64 {
+	session.RLock()
+	defer session.RUnlock()
+	return session.bytesRead
+}
+
+func (session *Session) updateBytesReadSentTime() {
+	session.Lock()
+	session.bytesReadSentTime = time.Now()
+	session.Unlock()
+}
+
 func (session *Session) SendWindowUsed() uint32 {
 	session.RLock()
 	defer session.RUnlock()
-	return session.sendWindowUsed
+	if session.bytesWrite > session.remoteBytesRead {
+		return uint32(session.bytesWrite - session.remoteBytesRead)
+	}
+	return 0
 }
 
 func (session *Session) RecvWindowUsed() uint32 {
@@ -137,30 +156,30 @@ func (session *Session) GetConnWindowSize() uint32 {
 	session.RLock()
 	defer session.RUnlock()
 	var windowSize uint32
-	for _, conn := range session.connections {
-		windowSize += uint32(conn.windowSize)
+	for _, connection := range session.connections {
+		windowSize += uint32(connection.windowSize)
 	}
 	return windowSize
 }
 
-func (session *Session) GetResendSeq() (uint32, error) {
+func (session *Session) getResendSeq() (uint32, error) {
 	var seq uint32
 	select {
 	case seq = <-session.resendChan:
-	case <-session.ctx.Done():
-		return 0, session.ctx.Err()
+	case <-session.context.Done():
+		return 0, session.context.Err()
 	default:
 	}
 	return seq, nil
 }
 
-func (session *Session) GetSendSeq() (uint32, error) {
+func (session *Session) getSendSeq() (uint32, error) {
 	var seq uint32
 	select {
 	case seq = <-session.resendChan:
 	case seq = <-session.sendChan:
-	case <-session.ctx.Done():
-		return 0, session.ctx.Err()
+	case <-session.context.Done():
+		return 0, session.context.Err()
 	}
 	return seq, nil
 }
@@ -185,6 +204,9 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 		return session.handleHandshakePacket(packet)
 	}
 
+	session.Lock()
+	defer session.Unlock()
+
 	if isEstablished && (len(packet.AckStartSeq) > 0 || len(packet.AckSeqCount) > 0) {
 		if len(packet.AckStartSeq) > 0 && len(packet.AckSeqCount) > 0 && len(packet.AckStartSeq) != len(packet.AckSeqCount) {
 			return ErrInvalidPacket
@@ -206,26 +228,23 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 			}
 
 			if len(packet.AckSeqCount) > 0 {
-				ackEndSeq = NextSeq(ackStartSeq, packet.AckSeqCount[i])
+				ackEndSeq = NextSeq(ackStartSeq, int64(packet.AckSeqCount[i]))
 			} else {
 				ackEndSeq = NextSeq(ackStartSeq, 1)
 			}
 
-			session.Lock()
-			if SeqInBetween(session.sendWindowStartSeq, session.sendWindowEndSeq, PrevSeq(ackEndSeq, 1)) {
+			if SeqInBetween(session.sendWindowStartSeq, session.sendWindowEndSeq, NextSeq(ackEndSeq, -1)) {
 				if !SeqInBetween(session.sendWindowStartSeq, session.sendWindowEndSeq, ackStartSeq) {
 					ackStartSeq = session.sendWindowStartSeq
 				}
 				for seq := ackStartSeq; SeqInBetween(ackStartSeq, ackEndSeq, seq); seq = NextSeq(seq, 1) {
-					for _, conn := range session.connections {
-						conn.ReceiveACK(seq)
+					for key, connection := range session.connections {
+						connection.ReceiveAck(seq, key == connKey(localClientID, remoteClientID))
 					}
 					delete(session.sendWindowData, seq)
 				}
 				if ackStartSeq == session.sendWindowStartSeq {
 					for {
-						session.sendWindowUsed -= session.sendWindowDataSize[session.sendWindowStartSeq]
-						delete(session.sendWindowDataSize, session.sendWindowStartSeq)
 						session.sendWindowStartSeq = NextSeq(session.sendWindowStartSeq, 1)
 						if _, ok := session.sendWindowData[session.sendWindowStartSeq]; ok {
 							break
@@ -234,13 +253,16 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 							break
 						}
 					}
-					select {
-					case session.sendWindowUpdate <- struct{}{}:
-					default:
-					}
 				}
 			}
-			session.Unlock()
+		}
+	}
+
+	if isEstablished && packet.BytesRead > session.remoteBytesRead {
+		session.remoteBytesRead = packet.BytesRead
+		select {
+		case session.sendWindowUpdate <- struct{}{}:
+		default:
 		}
 	}
 
@@ -249,11 +271,9 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 			return ErrDataSizeTooLarge
 		}
 
-		session.Lock()
 		if CompareSeq(packet.SequenceId, session.recvWindowStartSeq) >= 0 {
 			if _, ok := session.recvWindowData[packet.SequenceId]; !ok {
 				if session.recvWindowUsed+uint32(len(packet.Data)) > session.recvWindowSize {
-					session.Unlock()
 					return ErrRecvWindowFull
 				}
 
@@ -268,26 +288,30 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 				}
 			}
 		}
-		session.Unlock()
 
 		if conn, ok := session.connections[connKey(localClientID, remoteClientID)]; ok {
-			conn.SendACK(packet.SequenceId)
+			conn.SendAck(packet.SequenceId)
 		}
 	}
 
 	return nil
 }
 
-func (session *Session) start() error {
-	for _, conn := range session.connections {
-		conn.Start()
+func (session *Session) start() {
+	go session.startFlush()
+	go session.startCheckBytesRead()
+
+	for _, connection := range session.connections {
+		connection.Start()
 	}
-	var err error
+}
+
+func (session *Session) startFlush() error {
 	for {
 		select {
 		case <-time.After(time.Duration(session.config.FlushInterval) * time.Millisecond):
-		case <-session.ctx.Done():
-			return session.ctx.Err()
+		case <-session.context.Done():
+			return session.context.Err()
 		}
 
 		session.RLock()
@@ -298,13 +322,57 @@ func (session *Session) start() error {
 			continue
 		}
 
-		err = session.flushSendBuffer()
+		err := session.flushSendBuffer()
 		if err != nil {
-			if session.ctx.Err() != nil {
-				return session.ctx.Err()
+			if session.context.Err() != nil {
+				return session.context.Err()
 			}
 			log.Println(err)
 			continue
+		}
+	}
+}
+
+func (session *Session) startCheckBytesRead() error {
+	for {
+		select {
+		case <-time.After(time.Duration(session.config.CheckBytesReadInterval) * time.Millisecond):
+		case <-session.context.Done():
+			return session.context.Err()
+		}
+
+		session.RLock()
+		sentTime := session.bytesReadSentTime
+		updateTime := session.bytesReadUpdateTime
+		bytesRead := session.bytesRead
+		session.RUnlock()
+
+		if bytesRead == 0 || sentTime.After(updateTime) || time.Since(updateTime) < time.Duration(session.config.SendBytesReadThreshold)*time.Millisecond {
+			continue
+		}
+
+		buf, err := proto.Marshal(&pb.Packet{
+			BytesRead: bytesRead,
+		})
+		if err != nil {
+			log.Println(err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		success := false
+		for _, connection := range session.connections {
+			err = session.sendWith(connection.localClientID, connection.remoteClientID, buf, connection.RetransmissionTimeout())
+			if err != nil {
+				log.Println(err)
+				time.Sleep(time.Second)
+				continue
+			}
+			success = true
+		}
+
+		if success {
+			session.updateBytesReadSentTime()
 		}
 	}
 }
@@ -343,7 +411,6 @@ func (session *Session) flushSendBuffer() error {
 	}
 
 	session.sendWindowData[seq] = buf
-	session.sendWindowDataSize[seq] = uint32(len(session.sendBuffer))
 	session.sendWindowEndSeq = NextSeq(seq, 1)
 	session.sendBuffer = make([]byte, 0, session.sendMtu)
 
@@ -351,8 +418,8 @@ func (session *Session) flushSendBuffer() error {
 
 	select {
 	case session.sendChan <- seq:
-	case <-session.ctx.Done():
-		return session.ctx.Err()
+	case <-session.context.Done():
+		return session.context.Err()
 	}
 
 	return nil
@@ -371,8 +438,8 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 	var wg sync.WaitGroup
 	var lock sync.Mutex
 	var errMsg []string
-	success := make(chan struct{}, 0)
-	fail := make(chan struct{}, 0)
+	success := make(chan struct{})
+	fail := make(chan struct{})
 	if len(session.connections) > 0 {
 		for _, connection := range session.connections {
 			wg.Add(1)
@@ -433,56 +500,58 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 func (session *Session) handleHandshakePacket(packet *pb.Packet) error {
 	session.Lock()
 	defer session.Unlock()
-	if !session.isEstablished {
-		if packet.WindowSize == 0 {
-			return ErrInvalidPacket
-		}
-		if packet.WindowSize < session.sendWindowSize {
-			session.sendWindowSize = packet.WindowSize
-		}
 
-		if packet.Mtu == 0 {
-			return ErrInvalidPacket
-		}
-		if packet.Mtu < session.sendMtu {
-			session.sendMtu = packet.Mtu
-		}
-
-		if len(packet.ClientIds) == 0 {
-			return ErrInvalidPacket
-		}
-		n := len(session.localClientIDs)
-		if len(packet.ClientIds) < n {
-			n = len(packet.ClientIds)
-		}
-
-		connections := make(map[string]*Connection, n)
-		for i := 0; i < n; i++ {
-			conn, err := session.NewConnection(session.localClientIDs[i], packet.ClientIds[i])
-			if err != nil {
-				return err
-			}
-			connections[connKey(conn.localClientID, conn.remoteClientID)] = conn
-		}
-		session.connections = connections
-
-		session.remoteClientIDs = packet.ClientIds
-		session.sendChan = make(chan uint32)
-		session.resendChan = make(chan uint32, session.config.MaxConnectionWindowSize*int32(n))
-		session.sendWindowUpdate = make(chan struct{}, 1)
-		session.recvDataUpdate = make(chan struct{}, 1)
-		session.sendBuffer = make([]byte, 0, session.sendMtu)
-		session.sendWindowData = make(map[uint32][]byte)
-		session.sendWindowDataSize = make(map[uint32]uint32)
-		session.recvWindowData = make(map[uint32][]byte)
-
-		select {
-		case session.onAccept <- struct{}{}:
-		default:
-		}
-
-		session.isEstablished = true
+	if session.isEstablished {
+		return nil
 	}
+
+	if packet.WindowSize == 0 {
+		return ErrInvalidPacket
+	}
+	if packet.WindowSize < session.sendWindowSize {
+		session.sendWindowSize = packet.WindowSize
+	}
+
+	if packet.Mtu == 0 {
+		return ErrInvalidPacket
+	}
+	if packet.Mtu < session.sendMtu {
+		session.sendMtu = packet.Mtu
+	}
+
+	if len(packet.ClientIds) == 0 {
+		return ErrInvalidPacket
+	}
+	n := len(session.localClientIDs)
+	if len(packet.ClientIds) < n {
+		n = len(packet.ClientIds)
+	}
+
+	connections := make(map[string]*Connection, n)
+	for i := 0; i < n; i++ {
+		conn, err := NewConnection(session, session.localClientIDs[i], packet.ClientIds[i])
+		if err != nil {
+			return err
+		}
+		connections[connKey(conn.localClientID, conn.remoteClientID)] = conn
+	}
+	session.connections = connections
+
+	session.remoteClientIDs = packet.ClientIds
+	session.sendChan = make(chan uint32)
+	session.resendChan = make(chan uint32, session.config.MaxConnectionWindowSize*int32(n))
+	session.sendWindowUpdate = make(chan struct{}, 1)
+	session.recvDataUpdate = make(chan struct{}, 1)
+	session.sendBuffer = make([]byte, 0, session.sendMtu)
+	session.sendWindowData = make(map[uint32][]byte)
+	session.recvWindowData = make(map[uint32][]byte)
+	session.isEstablished = true
+
+	select {
+	case session.onAccept <- struct{}{}:
+	default:
+	}
+
 	return nil
 }
 
@@ -501,8 +570,8 @@ func (session *Session) sendClosePacket() error {
 	var wg sync.WaitGroup
 	var lock sync.Mutex
 	var errMsg []string
-	success := make(chan struct{}, 0)
-	fail := make(chan struct{}, 0)
+	success := make(chan struct{})
+	fail := make(chan struct{})
 	for _, connection := range session.connections {
 		wg.Add(1)
 		go func(connection *Connection) {
@@ -547,6 +616,7 @@ func (session *Session) handleClosePacket() error {
 func (session *Session) Dial(ctx context.Context) error {
 	session.acceptLock.Lock()
 	defer session.acceptLock.Unlock()
+
 	if session.isAccepted {
 		return ErrSessionEstablished
 	}
@@ -572,13 +642,16 @@ func (session *Session) Dial(ctx context.Context) error {
 	}
 
 	go session.start()
+
 	session.isAccepted = true
+
 	return nil
 }
 
 func (session *Session) Accept() error {
 	session.acceptLock.Lock()
 	defer session.acceptLock.Unlock()
+
 	if session.isAccepted {
 		return ErrSessionEstablished
 	}
@@ -590,7 +663,9 @@ func (session *Session) Accept() error {
 	}
 
 	go session.start()
+
 	session.isAccepted = true
+
 	return session.sendHandshakePacket(time.Duration(session.config.MaxRetransmissionTimeout) * time.Millisecond)
 }
 
@@ -643,7 +718,7 @@ func (session *Session) Read(b []byte) (_ int, e error) {
 	defer session.Unlock()
 
 	data := session.recvWindowData[session.recvWindowStartSeq]
-	if !session.IsStream() && len(b) < len(session.recvWindowData[session.recvWindowStartSeq]) {
+	if !session.IsStream() && len(b) < len(data) {
 		return 0, ErrBufferSizeTooSmall
 	}
 
@@ -655,6 +730,8 @@ func (session *Session) Read(b []byte) (_ int, e error) {
 		session.recvWindowData[session.recvWindowStartSeq] = data[bytesReceived:]
 	}
 	session.recvWindowUsed -= uint32(bytesReceived)
+	session.bytesRead += uint64(bytesReceived)
+	session.bytesReadUpdateTime = time.Now()
 
 	if session.IsStream() {
 		for bytesReceived < len(b) {
@@ -670,6 +747,8 @@ func (session *Session) Read(b []byte) (_ int, e error) {
 				session.recvWindowData[session.recvWindowStartSeq] = data[n:]
 			}
 			session.recvWindowUsed -= uint32(n)
+			session.bytesRead += uint64(n)
+			session.bytesReadUpdateTime = time.Now()
 			bytesReceived += n
 		}
 	}
@@ -729,7 +808,7 @@ func (session *Session) Write(b []byte) (_ int, e error) {
 			}
 			session.sendBuffer = session.sendBuffer[:l+n]
 			copy(session.sendBuffer[l:], b)
-			session.sendWindowUsed += uint32(n)
+			session.bytesWrite += uint64(n)
 			bytesSent += n
 			session.Unlock()
 
@@ -750,7 +829,7 @@ func (session *Session) Write(b []byte) (_ int, e error) {
 		session.Lock()
 		session.sendBuffer = session.sendBuffer[:len(b)]
 		copy(session.sendBuffer, b)
-		session.sendWindowUsed += uint32(len(b))
+		session.bytesWrite += uint64(len(b))
 		bytesSent += len(b)
 		session.Unlock()
 
@@ -774,14 +853,13 @@ func (session *Session) Close() error {
 	session.isClosed = true
 	session.Unlock()
 
-	timeout := make(chan struct{}, 1)
-
+	timeout := make(chan struct{})
 	if session.config.Linger > 0 {
 		go func() {
 			select {
 			case <-time.After(time.Duration(session.config.Linger) * time.Millisecond):
-				timeout <- struct{}{}
-			case <-session.ctx.Done():
+				close(timeout)
+			case <-session.context.Done():
 			}
 		}()
 	}
@@ -843,18 +921,18 @@ func (session *Session) SetDeadline(t time.Time) error {
 
 func (session *Session) SetReadDeadline(t time.Time) error {
 	if t == zeroTime {
-		session.readContext, session.readCancel = context.WithCancel(session.ctx)
+		session.readContext, session.readCancel = context.WithCancel(session.context)
 	} else {
-		session.readContext, session.readCancel = context.WithDeadline(session.ctx, t)
+		session.readContext, session.readCancel = context.WithDeadline(session.context, t)
 	}
 	return nil
 }
 
 func (session *Session) SetWriteDeadline(t time.Time) error {
 	if t == zeroTime {
-		session.writeContext, session.writeCancel = context.WithCancel(session.ctx)
+		session.writeContext, session.writeCancel = context.WithCancel(session.context)
 	} else {
-		session.writeContext, session.writeCancel = context.WithDeadline(session.ctx, t)
+		session.writeContext, session.writeCancel = context.WithDeadline(session.context, t)
 	}
 	return nil
 }
