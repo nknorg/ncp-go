@@ -16,6 +16,8 @@ type Config struct {
 	MaxRetransmissionTimeout     int32 // in millisecond
 	SendAckInterval              int32 // in millisecond
 	CheckTimeoutInterval         int32 // in millisecond
+	CheckBytesReadInterval       int32 // in millisecond
+	SendBytesReadThreshold       int32 // in millisecond
 }
 
 var DefaultConfig = Config{
@@ -32,6 +34,8 @@ var DefaultConfig = Config{
 	MaxRetransmissionTimeout:     10000,
 	SendAckInterval:              50,
 	CheckTimeoutInterval:         50,
+	CheckBytesReadInterval:       100,
+	SendBytesReadThreshold:       200,
 }
 
 func MergeConfig(conf *Config) (*Config, error) {

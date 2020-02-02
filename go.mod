@@ -1,4 +1,4 @@
-module github.com/nknorg/ncp
+module github.com/nknorg/ncp-go
 
 go 1.13
 
