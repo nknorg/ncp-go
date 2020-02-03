@@ -25,4 +25,5 @@ message Packet {
   uint32 window_size = 7;
   uint32 mtu = 8;
   bool close = 9;
+  bool handshake = 10;
 }

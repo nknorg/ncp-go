@@ -1,3 +1,3 @@
-# NCP
+# ncp-go
 
-NCP (NKN Control Protocol) is a ARQ protocol for NKN network.
+Go implementation of NCP (NKN Control Protocol), a ARQ protocol for NKN network.

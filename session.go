@@ -200,7 +200,7 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 	}
 
 	isEstablished := session.IsEstablished()
-	if !isEstablished && packet.SequenceId == 0 && len(packet.AckStartSeq) == 0 && len(packet.AckSeqCount) == 0 {
+	if !isEstablished && packet.Handshake {
 		return session.handleHandshakePacket(packet)
 	}
 
@@ -427,6 +427,7 @@ func (session *Session) flushSendBuffer() error {
 
 func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 	buf, err := proto.Marshal(&pb.Packet{
+		Handshake:  true,
 		ClientIds:  session.localClientIDs,
 		WindowSize: session.recvWindowSize,
 		Mtu:        session.recvMtu,
@@ -799,7 +800,7 @@ func (session *Session) Write(b []byte) (_ int, e error) {
 			}
 
 			session.Lock()
-			shouldFlush := false
+			shouldFlush := sendWindowAvailable == session.sendWindowSize
 			c := int(session.sendMtu)
 			l := len(session.sendBuffer)
 			if n >= c-l {
