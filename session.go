@@ -607,10 +607,14 @@ func (session *Session) sendClosePacket() error {
 }
 
 func (session *Session) handleClosePacket() error {
+	session.readCancel()
+	session.writeCancel()
+	session.cancel()
+
 	session.Lock()
 	session.isClosed = true
 	session.Unlock()
-	session.close()
+
 	return nil
 }
 
@@ -843,16 +847,9 @@ func (session *Session) Write(b []byte) (_ int, e error) {
 	return bytesSent, nil
 }
 
-func (session *Session) close() {
-	session.cancel()
+func (session *Session) Close() error {
 	session.readCancel()
 	session.writeCancel()
-}
-
-func (session *Session) Close() error {
-	session.Lock()
-	session.isClosed = true
-	session.Unlock()
 
 	timeout := make(chan struct{})
 	if session.config.Linger > 0 {
@@ -894,7 +891,11 @@ func (session *Session) Close() error {
 			log.Println(err)
 		}
 
-		session.close()
+		session.cancel()
+
+		session.Lock()
+		session.isClosed = true
+		session.Unlock()
 	}()
 
 	return nil
