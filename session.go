@@ -577,7 +577,7 @@ func (session *Session) sendClosePacket() error {
 		wg.Add(1)
 		go func(connection *Connection) {
 			defer wg.Done()
-			err = session.sendWith(connection.localClientID, connection.remoteClientID, buf, connection.RetransmissionTimeout())
+			err := session.sendWith(connection.localClientID, connection.remoteClientID, buf, connection.RetransmissionTimeout())
 			if err == nil {
 				select {
 				case success <- struct{}{}:
