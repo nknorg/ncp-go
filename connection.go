@@ -159,6 +159,9 @@ func (conn *Connection) tx() error {
 			if conn.session.IsClosed() {
 				return ErrSessionClosed
 			}
+			if err == ErrConnClosed {
+				return err
+			}
 			log.Println(err)
 			select {
 			case conn.session.resendChan <- seq:
@@ -234,6 +237,9 @@ func (conn *Connection) sendAck() error {
 
 		err = conn.session.sendWith(conn.localClientID, conn.remoteClientID, buf, conn.retransmissionTimeout)
 		if err != nil {
+			if err == ErrConnClosed {
+				return err
+			}
 			log.Println(err)
 			time.Sleep(time.Second)
 			continue

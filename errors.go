@@ -11,6 +11,7 @@ var (
 	ErrInvalidPacket         = NewGenericError("invalid packet", false, true)
 	ErrRecvWindowFull        = NewGenericError("receive window full", false, true)
 	ErrNotHandshake          = NewGenericError("first packet is not handshake packet", false, true)
+	ErrConnClosed            = NewGenericError("connection closed", false, false)
 )
 
 type GenericError struct {
