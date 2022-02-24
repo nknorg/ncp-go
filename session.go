@@ -439,8 +439,8 @@ func (session *Session) sendHandshakePacket(writeTimeout time.Duration) error {
 	var wg sync.WaitGroup
 	var lock sync.Mutex
 	var errMsg []string
-	success := make(chan struct{})
-	fail := make(chan struct{})
+	success := make(chan struct{}, 1)
+	fail := make(chan struct{}, 1)
 	if len(session.connections) > 0 {
 		for _, connection := range session.connections {
 			wg.Add(1)
@@ -571,8 +571,8 @@ func (session *Session) sendClosePacket() error {
 	var wg sync.WaitGroup
 	var lock sync.Mutex
 	var errMsg []string
-	success := make(chan struct{})
-	fail := make(chan struct{})
+	success := make(chan struct{}, 1)
+	fail := make(chan struct{}, 1)
 	for _, connection := range session.connections {
 		wg.Add(1)
 		go func(connection *Connection) {
