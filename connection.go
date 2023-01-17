@@ -16,7 +16,7 @@ type Connection struct {
 	session          *Session
 	localClientID    string
 	remoteClientID   string
-	windowSize       uint32
+	windowSize       float64
 	sendWindowUpdate chan struct{}
 
 	sync.RWMutex
@@ -26,12 +26,12 @@ type Connection struct {
 	retransmissionTimeout time.Duration
 }
 
-func NewConnection(session *Session, localClientID, remoteClientID string) (*Connection, error) {
+func NewConnection(session *Session, localClientID, remoteClientID string, initialWindowSize float64) (*Connection, error) {
 	conn := &Connection{
 		session:               session,
 		localClientID:         localClientID,
 		remoteClientID:        remoteClientID,
-		windowSize:            uint32(session.config.InitialConnectionWindowSize),
+		windowSize:            initialWindowSize,
 		retransmissionTimeout: time.Duration(session.config.InitialRetransmissionTimeout) * time.Millisecond,
 		sendWindowUpdate:      make(chan struct{}, 1),
 		timeSentSeq:           make(map[uint32]time.Time),
@@ -76,10 +76,7 @@ func (conn *Connection) ReceiveAck(sequenceID uint32, isSentByMe bool) {
 	}
 
 	if _, ok := conn.resentSeq[sequenceID]; !ok {
-		conn.windowSize++
-		if conn.windowSize > uint32(conn.session.config.MaxConnectionWindowSize) {
-			conn.windowSize = uint32(conn.session.config.MaxConnectionWindowSize)
-		}
+		conn.setWindowSize(conn.windowSize + 1)
 	}
 
 	if isSentByMe {
@@ -100,7 +97,7 @@ func (conn *Connection) ReceiveAck(sequenceID uint32, isSentByMe bool) {
 }
 
 func (conn *Connection) waitForSendWindow(ctx context.Context) error {
-	for conn.SendWindowUsed() >= conn.windowSize {
+	for float64(conn.SendWindowUsed()) >= conn.windowSize {
 		select {
 		case <-conn.sendWindowUpdate:
 		case <-time.After(maxWait):
@@ -163,6 +160,13 @@ func (conn *Connection) tx() error {
 				return err
 			}
 			log.Println(err)
+
+			// reduce window size
+			conn.Lock()
+			conn.setWindowSize(conn.windowSize / 2)
+			conn.Unlock()
+			conn.session.updateConnWindowSize()
+
 			select {
 			case conn.session.resendChan <- seq:
 				seq = 0
@@ -259,6 +263,7 @@ func (conn *Connection) checkTimeout() error {
 
 		threshold := time.Now().Add(-conn.retransmissionTimeout)
 		conn.Lock()
+		newResend := false
 		for seq, t := range conn.timeSentSeq {
 			if _, ok := conn.resentSeq[seq]; ok {
 				continue
@@ -267,15 +272,23 @@ func (conn *Connection) checkTimeout() error {
 				select {
 				case conn.session.resendChan <- seq:
 					conn.resentSeq[seq] = struct{}{}
-					conn.windowSize /= 2
-					if conn.windowSize < uint32(conn.session.config.MinConnectionWindowSize) {
-						conn.windowSize = uint32(conn.session.config.MinConnectionWindowSize)
-					}
+					conn.setWindowSize(conn.windowSize / 2)
+					newResend = true
 				case <-conn.session.context.Done():
 					return conn.session.context.Err()
 				}
 			}
 		}
 		conn.Unlock()
+		if newResend {
+			conn.session.updateConnWindowSize()
+		}
 	}
+}
+
+func (conn *Connection) setWindowSize(n float64) {
+	if n < float64(conn.session.config.MinConnectionWindowSize) {
+		n = float64(conn.session.config.MinConnectionWindowSize)
+	}
+	conn.windowSize = n
 }

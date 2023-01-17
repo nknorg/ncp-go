@@ -6,8 +6,6 @@ type Config struct {
 	NonStream                    bool
 	SessionWindowSize            int32 // in bytes
 	MTU                          int32 // in bytes
-	InitialConnectionWindowSize  int32 // in packets
-	MaxConnectionWindowSize      int32 // in packets
 	MinConnectionWindowSize      int32 // in packets
 	MaxAckSeqListSize            int32
 	FlushInterval                int32 // in millisecond
@@ -24,8 +22,6 @@ var DefaultConfig = Config{
 	NonStream:                    false,
 	SessionWindowSize:            4 << 20,
 	MTU:                          1024,
-	InitialConnectionWindowSize:  16,
-	MaxConnectionWindowSize:      256,
 	MinConnectionWindowSize:      1,
 	MaxAckSeqListSize:            32,
 	FlushInterval:                10,
