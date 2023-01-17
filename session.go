@@ -61,6 +61,8 @@ type Session struct {
 	bytesReadSentTime   time.Time
 	bytesReadUpdateTime time.Time
 	remoteBytesRead     uint64
+
+	sendWindowPacketCount float64 // Equal to sendWindowsSize / sendMtu
 }
 
 type SendWithFunc func(localClientID, remoteClientID string, buf []byte, writeTimeout time.Duration) error
@@ -72,26 +74,27 @@ func NewSession(localAddr, remoteAddr net.Addr, localClientIDs, remoteClientIDs 
 	}
 
 	session := &Session{
-		config:              config,
-		localAddr:           localAddr,
-		remoteAddr:          remoteAddr,
-		localClientIDs:      localClientIDs,
-		remoteClientIDs:     remoteClientIDs,
-		sendWith:            sendWith,
-		sendWindowSize:      uint32(config.SessionWindowSize),
-		recvWindowSize:      uint32(config.SessionWindowSize),
-		sendMtu:             uint32(config.MTU),
-		recvMtu:             uint32(config.MTU),
-		sendWindowStartSeq:  MinSequenceID,
-		sendWindowEndSeq:    MinSequenceID,
-		recvWindowStartSeq:  MinSequenceID,
-		recvWindowUsed:      0,
-		bytesWrite:          0,
-		bytesRead:           0,
-		bytesReadSentTime:   time.Now(),
-		bytesReadUpdateTime: time.Now(),
-		remoteBytesRead:     0,
-		onAccept:            make(chan struct{}, 1),
+		config:                config,
+		localAddr:             localAddr,
+		remoteAddr:            remoteAddr,
+		localClientIDs:        localClientIDs,
+		remoteClientIDs:       remoteClientIDs,
+		sendWith:              sendWith,
+		sendWindowSize:        uint32(config.SessionWindowSize),
+		recvWindowSize:        uint32(config.SessionWindowSize),
+		sendMtu:               uint32(config.MTU),
+		recvMtu:               uint32(config.MTU),
+		sendWindowStartSeq:    MinSequenceID,
+		sendWindowEndSeq:      MinSequenceID,
+		recvWindowStartSeq:    MinSequenceID,
+		recvWindowUsed:        0,
+		bytesWrite:            0,
+		bytesRead:             0,
+		bytesReadSentTime:     time.Now(),
+		bytesReadUpdateTime:   time.Now(),
+		remoteBytesRead:       0,
+		onAccept:              make(chan struct{}, 1),
+		sendWindowPacketCount: float64(config.SessionWindowSize) / float64(config.MTU),
 	}
 
 	session.context, session.cancel = context.WithCancel(context.Background())
@@ -256,6 +259,8 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 				}
 			}
 		}
+
+		session.updateConnWindowSize()
 	}
 
 	if isEstablished && packet.BytesRead > session.remoteBytesRead {
@@ -519,6 +524,7 @@ func (session *Session) handleHandshakePacket(packet *pb.Packet) error {
 	if packet.Mtu < session.sendMtu {
 		session.sendMtu = packet.Mtu
 	}
+	session.sendWindowPacketCount = float64(session.sendWindowSize) / float64(session.sendMtu)
 
 	if len(packet.ClientIds) == 0 {
 		return ErrInvalidPacket
@@ -528,9 +534,10 @@ func (session *Session) handleHandshakePacket(packet *pb.Packet) error {
 		n = len(packet.ClientIds)
 	}
 
+	initialWindowSize := session.sendWindowPacketCount / float64(n)
 	connections := make(map[string]*Connection, n)
 	for i := 0; i < n; i++ {
-		conn, err := NewConnection(session, session.localClientIDs[i], packet.ClientIds[i])
+		conn, err := NewConnection(session, session.localClientIDs[i], packet.ClientIds[i], initialWindowSize)
 		if err != nil {
 			return err
 		}
@@ -540,7 +547,7 @@ func (session *Session) handleHandshakePacket(packet *pb.Packet) error {
 
 	session.remoteClientIDs = packet.ClientIds
 	session.sendChan = make(chan uint32)
-	session.resendChan = make(chan uint32, session.config.MaxConnectionWindowSize*int32(n))
+	session.resendChan = make(chan uint32, int(session.sendWindowPacketCount)+n)
 	session.sendWindowUpdate = make(chan struct{}, 1)
 	session.recvDataUpdate = make(chan struct{}, 1)
 	session.sendBuffer = make([]byte, 0, session.sendMtu)
@@ -942,4 +949,23 @@ func (session *Session) SetWriteDeadline(t time.Time) error {
 // SetLinger sets session linger in unit of millisecond
 func (session *Session) SetLinger(t int32) {
 	session.config.Linger = t
+}
+
+func (session *Session) updateConnWindowSize() {
+	totalSize := 0.0
+	for _, conn := range session.connections {
+		conn.RLock()
+		totalSize += float64(conn.windowSize)
+		conn.RUnlock()
+	}
+	if totalSize <= 0 {
+		return
+	}
+
+	for _, conn := range session.connections {
+		conn.Lock()
+		n := session.sendWindowPacketCount * (conn.windowSize / totalSize)
+		conn.setWindowSize(n)
+		conn.Unlock()
+	}
 }
