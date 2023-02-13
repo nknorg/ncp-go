@@ -296,6 +296,8 @@ func (session *Session) ReceiveWith(localClientID, remoteClientID string, buf []
 
 		if conn, ok := session.connections[connKey(localClientID, remoteClientID)]; ok {
 			conn.SendAck(packet.SequenceId)
+		} else {
+			return ErrConnNotFound
 		}
 	}
 
