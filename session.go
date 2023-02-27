@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/nknorg/ncp-go/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -970,4 +970,8 @@ func (session *Session) updateConnWindowSize() {
 		conn.setWindowSize(n)
 		conn.Unlock()
 	}
+}
+
+func (session *Session) GetContext() context.Context {
+	return session.context
 }
