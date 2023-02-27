@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/nknorg/ncp-go/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 type Connection struct {
