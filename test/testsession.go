@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	mockconn "github.com/nknorg/mockconn-go"
-	ncp "github.com/nknorg/ncp-go"
+	"github.com/nknorg/mockconn-go"
+	"github.com/nknorg/ncp-go"
 )
 
 type TestSession struct {

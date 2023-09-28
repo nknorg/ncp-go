@@ -3,6 +3,7 @@ package ncp
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"log"
 	"math"
 	"sync"
@@ -128,7 +129,7 @@ func (conn *Connection) tx() error {
 
 		if seq == 0 {
 			err = conn.waitForSendWindow(conn.session.context)
-			if err == errMaxWait {
+			if errors.Is(err, errMaxWait) {
 				continue
 			}
 			if err != nil {
