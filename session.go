@@ -685,10 +685,10 @@ func (session *Session) Accept() error {
 
 func (session *Session) Read(b []byte) (_ int, e error) {
 	defer func() {
-		if e == context.DeadlineExceeded {
+		if errors.Is(e, context.DeadlineExceeded) {
 			e = ErrReadDeadlineExceeded
 		}
-		if e == context.Canceled {
+		if errors.Is(e, context.Canceled) {
 			e = ErrSessionClosed
 		}
 	}()
@@ -772,10 +772,10 @@ func (session *Session) Read(b []byte) (_ int, e error) {
 
 func (session *Session) Write(b []byte) (_ int, e error) {
 	defer func() {
-		if e == context.DeadlineExceeded {
+		if errors.Is(e, context.DeadlineExceeded) {
 			e = ErrWriteDeadlineExceeded
 		}
-		if e == context.Canceled {
+		if errors.Is(e, context.Canceled) {
 			e = ErrSessionClosed
 		}
 	}()
@@ -957,7 +957,7 @@ func (session *Session) updateConnWindowSize() {
 	totalSize := 0.0
 	for _, conn := range session.connections {
 		conn.RLock()
-		totalSize += float64(conn.windowSize)
+		totalSize += conn.windowSize
 		conn.RUnlock()
 	}
 	if totalSize <= 0 {

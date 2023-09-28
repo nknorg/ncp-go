@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	mockconn "github.com/nknorg/mockconn-go"
+	"github.com/nknorg/mockconn-go"
 )
 
 // go test -v -run=TestCloseRemoteRead
