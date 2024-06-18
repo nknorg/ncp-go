@@ -342,7 +342,9 @@ func (session *Session) startFlush() error {
 			if session.context.Err() != nil {
 				return session.context.Err()
 			}
-			log.Println(err)
+			if session.config.Verbose {
+				log.Println(err)
+			}
 			continue
 		}
 	}
@@ -370,7 +372,9 @@ func (session *Session) startCheckBytesRead() error {
 			BytesRead: bytesRead,
 		})
 		if err != nil {
-			log.Println(err)
+			if session.config.Verbose {
+				log.Println(err)
+			}
 			time.Sleep(time.Second)
 			continue
 		}
@@ -379,7 +383,9 @@ func (session *Session) startCheckBytesRead() error {
 		for _, connection := range session.connections {
 			err = session.sendWith(connection.localClientID, connection.remoteClientID, buf, connection.RetransmissionTimeout())
 			if err != nil {
-				log.Println(err)
+				if session.config.Verbose {
+					log.Println(err)
+				}
 				time.Sleep(time.Second)
 				continue
 			}
@@ -889,7 +895,9 @@ func (session *Session) Close() error {
 		if session.config.Linger != 0 {
 			err := session.flushSendBuffer()
 			if err != nil {
-				log.Println(err)
+				if session.config.Verbose {
+					log.Println(err)
+				}
 			}
 
 			func() {
@@ -911,7 +919,9 @@ func (session *Session) Close() error {
 
 		err := session.sendClosePacket()
 		if err != nil {
-			log.Println(err)
+			if session.config.Verbose {
+				log.Println(err)
+			}
 		}
 
 		session.cancel()
