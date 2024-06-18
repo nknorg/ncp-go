@@ -16,6 +16,7 @@ type Config struct {
 	CheckTimeoutInterval         int32 // in millisecond
 	CheckBytesReadInterval       int32 // in millisecond
 	SendBytesReadThreshold       int32 // in millisecond
+	Verbose                      bool
 }
 
 var DefaultConfig = Config{
@@ -32,6 +33,7 @@ var DefaultConfig = Config{
 	CheckTimeoutInterval:         50,
 	CheckBytesReadInterval:       100,
 	SendBytesReadThreshold:       200,
+	Verbose:                      false,
 }
 
 func MergeConfig(conf *Config) (*Config, error) {

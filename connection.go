@@ -159,7 +159,9 @@ func (conn *Connection) tx() error {
 			if err == ErrConnClosed {
 				return err
 			}
-			log.Println(err)
+			if conn.session.config.Verbose {
+				log.Println(err)
+			}
 
 			// reduce window size
 			conn.Lock()
@@ -234,17 +236,24 @@ func (conn *Connection) sendAck() error {
 			BytesRead:   conn.session.GetBytesRead(),
 		})
 		if err != nil {
-			log.Println(err)
+			if conn.session.config.Verbose {
+				log.Println(err)
+			}
 			time.Sleep(time.Second)
 			continue
 		}
 
 		err = conn.session.sendWith(conn.localClientID, conn.remoteClientID, buf, conn.retransmissionTimeout)
 		if err != nil {
+			if conn.session.IsClosed() {
+				return ErrSessionClosed
+			}
 			if err == ErrConnClosed {
 				return err
 			}
-			log.Println(err)
+			if conn.session.config.Verbose {
+				log.Println(err)
+			}
 			time.Sleep(time.Second)
 			continue
 		}
