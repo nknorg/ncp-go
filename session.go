@@ -3,6 +3,7 @@ package ncp
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"strings"
@@ -49,6 +50,7 @@ type Session struct {
 	sync.RWMutex
 	isEstablished       bool
 	isClosed            bool
+	isClosedByRemote    bool
 	sendBuffer          []byte
 	sendWindowStartSeq  uint32
 	sendWindowEndSeq    uint32
@@ -120,6 +122,12 @@ func (session *Session) IsClosed() bool {
 	session.RLock()
 	defer session.RUnlock()
 	return session.isClosed
+}
+
+func (session *Session) IsClosedByRemote() bool {
+	session.RLock()
+	defer session.RUnlock()
+	return session.isClosedByRemote
 }
 
 func (session *Session) GetBytesRead() uint64 {
@@ -621,7 +629,10 @@ func (session *Session) handleClosePacket() error {
 	session.cancel()
 
 	session.Lock()
-	session.isClosed = true
+	if !session.isClosed {
+		session.isClosed = true
+		session.isClosedByRemote = true
+	}
 	session.Unlock()
 
 	return nil
@@ -690,6 +701,9 @@ func (session *Session) Read(b []byte) (_ int, e error) {
 		}
 		if e == context.Canceled {
 			e = ErrSessionClosed
+		}
+		if e == ErrSessionClosed && session.IsClosedByRemote() {
+			e = io.EOF
 		}
 	}()
 
@@ -957,7 +971,7 @@ func (session *Session) updateConnWindowSize() {
 	totalSize := 0.0
 	for _, conn := range session.connections {
 		conn.RLock()
-		totalSize += float64(conn.windowSize)
+		totalSize += conn.windowSize
 		conn.RUnlock()
 	}
 	if totalSize <= 0 {
