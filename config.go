@@ -1,6 +1,6 @@
 package ncp
 
-import "github.com/imdario/mergo"
+import "github.com/jinzhu/copier"
 
 type Config struct {
 	NonStream                    bool
@@ -39,7 +39,7 @@ var DefaultConfig = Config{
 func MergeConfig(conf *Config) (*Config, error) {
 	merged := DefaultConfig
 	if conf != nil {
-		err := mergo.Merge(&merged, conf, mergo.WithOverride)
+		err := copier.Copy(&merged, conf)
 		if err != nil {
 			return nil, err
 		}
