@@ -39,7 +39,7 @@ var DefaultConfig = Config{
 func MergeConfig(conf *Config) (*Config, error) {
 	merged := DefaultConfig
 	if conf != nil {
-		err := copier.Copy(&merged, conf)
+		err := copier.CopyWithOption(&merged, conf, copier.Option{IgnoreEmpty: true})
 		if err != nil {
 			return nil, err
 		}
